@@ -1,0 +1,64 @@
+{
+  "thermal": {
+    "general": {
+      "enable_rf_api": true,
+      "enable_redstone_flux": true,
+      "enable_thermal_dynamics": true
+    },
+    "machines": {
+      "pulverizer": {
+        "enabled": true,
+        "base_power": 4000,
+        "base_speed": 100,
+        "augment_slots": 4
+      },
+      "furnace": {
+        "enabled": true,
+        "base_power": 2000,
+        "base_speed": 100,
+        "augment_slots": 4
+      },
+      "sawmill": {
+        "enabled": true,
+        "base_power": 3000,
+        "base_speed": 100,
+        "augment_slots": 4
+      }
+    },
+    "energy": {
+      "rf_per_coal": 32000,
+      "rf_per_blaze_rod": 24000,
+      "dynamo_efficiency": 0.9
+    },
+    "world_generation": {
+      "copper_ore": {
+        "enabled": true,
+        "min_height": -64,
+        "max_height": 112,
+        "vein_size": 9,
+        "veins_per_chunk": 20
+      },
+      "tin_ore": {
+        "enabled": true,
+        "min_height": -64,
+        "max_height": 112,
+        "vein_size": 9,
+        "veins_per_chunk": 12
+      },
+      "silver_ore": {
+        "enabled": true,
+        "min_height": -64,
+        "max_height": 64,
+        "vein_size": 8,
+        "veins_per_chunk": 4
+      },
+      "lead_ore": {
+        "enabled": true,
+        "min_height": -64,
+        "max_height": 48,
+        "vein_size": 8,
+        "veins_per_chunk": 4
+      }
+    }
+  }
+}

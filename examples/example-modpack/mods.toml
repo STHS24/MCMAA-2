@@ -1,0 +1,61 @@
+# Example modpack configuration file
+# This is a sample TOML file that demonstrates the structure MCMAA can analyze
+
+[modpack]
+name = "Example Modpack"
+version = "1.0.0"
+minecraft_version = "1.20.1"
+forge_version = "47.2.0"
+
+[[mods]]
+name = "JEI"
+mod_id = "jei"
+version = "15.2.0.27"
+filename = "jei-1.20.1-15.2.0.27.jar"
+required = true
+description = "Just Enough Items - Recipe and item viewing mod"
+
+[[mods]]
+name = "Iron Chests"
+mod_id = "ironchest"
+version = "14.4.4"
+filename = "IronChests-1.20.1-14.4.4.jar"
+required = false
+description = "Adds various types of chests with different storage capacities"
+
+[[mods]]
+name = "Thermal Foundation"
+mod_id = "thermal_foundation"
+version = "10.4.2"
+filename = "ThermalFoundation-1.20.1-10.4.2.jar"
+required = true
+description = "Base mod for the Thermal series"
+
+[[mods]]
+name = "Thermal Expansion"
+mod_id = "thermal_expansion"
+version = "10.4.2"
+filename = "ThermalExpansion-1.20.1-10.4.2.jar"
+required = true
+dependencies = ["thermal_foundation"]
+description = "Machines and automation for Thermal series"
+
+[[mods]]
+name = "Applied Energistics 2"
+mod_id = "appliedenergistics2"
+version = "15.0.16"
+filename = "appliedenergistics2-15.0.16.jar"
+required = false
+description = "Advanced storage and automation system"
+
+[config]
+# Global configuration settings
+enable_debug = false
+max_memory = "4G"
+java_args = ["-XX:+UseG1GC", "-XX:+UnlockExperimentalVMOptions"]
+
+[performance]
+# Performance optimization settings
+chunk_loading_threads = 4
+entity_processing_threads = 2
+network_compression = true
