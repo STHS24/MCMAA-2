@@ -13,8 +13,8 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddMcmaaAI(this IServiceCollection services)
     {
-        services.AddHttpClient<IAiAssistant, OllamaAiAssistant>();
-        
+        services.AddScoped<IAiAssistant, OllamaAiAssistant>();
+
         return services;
     }
 }

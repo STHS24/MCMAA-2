@@ -170,14 +170,14 @@ public class ContentPreprocessor : IContentPreprocessor
         return Math.Max(wordCount, charBasedEstimate);
     }
 
-    public async Task<string> OptimizeContentAsync(string content, int maxTokens, CancellationToken cancellationToken = default)
+    public Task<string> OptimizeContentAsync(string content, int maxTokens, CancellationToken cancellationToken = default)
     {
         var currentTokens = EstimateTokenCount(content);
         
         if (currentTokens <= maxTokens)
         {
             _logger.LogDebug("Content already within token limit: {CurrentTokens}/{MaxTokens}", currentTokens, maxTokens);
-            return content;
+            return Task.FromResult(content);
         }
 
         _logger.LogDebug("Optimizing content: {CurrentTokens} -> {MaxTokens} tokens", currentTokens, maxTokens);
@@ -221,12 +221,12 @@ public class ContentPreprocessor : IContentPreprocessor
             result.AppendLine("[Content truncated to fit token limits]");
         }
 
-        return result.ToString();
+        return Task.FromResult(result.ToString());
     }
 
-    public async Task<PrioritizedSections> PrioritizeSectionsAsync(
-        ScanResult scanResult, 
-        AnalysisTask task, 
+    public Task<PrioritizedSections> PrioritizeSectionsAsync(
+        ScanResult scanResult,
+        AnalysisTask task,
         CancellationToken cancellationToken = default)
     {
         var sections = new PrioritizedSections();
@@ -303,13 +303,13 @@ public class ContentPreprocessor : IContentPreprocessor
         _logger.LogDebug("Prioritized {TotalSections} sections: {High} high, {Medium} medium, {Low} low priority",
             sections.TotalSections, sections.HighPriority.Count, sections.MediumPriority.Count, sections.LowPriority.Count);
 
-        return sections;
+        return Task.FromResult(sections);
     }
 
-    public async Task<string> FilterContentAsync(string content, AnalysisTask task, CancellationToken cancellationToken = default)
+    public Task<string> FilterContentAsync(string content, AnalysisTask task, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrEmpty(content))
-            return content;
+            return Task.FromResult(content);
 
         var lines = content.Split('\n');
         var filteredLines = new List<string>();
@@ -336,7 +336,7 @@ public class ContentPreprocessor : IContentPreprocessor
             }
         }
 
-        return string.Join('\n', filteredLines);
+        return Task.FromResult(string.Join('\n', filteredLines));
     }
 
     private string GenerateFullContent(ScanResult scanResult)
@@ -386,7 +386,7 @@ public class ContentPreprocessor : IContentPreprocessor
         return sb.ToString();
     }
 
-    private async Task<string> GenerateOptimizedContentAsync(
+    private Task<string> GenerateOptimizedContentAsync(
         PrioritizedSections sections,
         AnalysisTask task,
         CancellationToken cancellationToken = default)
@@ -427,7 +427,7 @@ public class ContentPreprocessor : IContentPreprocessor
             sb.AppendLine();
         }
 
-        return sb.ToString();
+        return Task.FromResult(sb.ToString());
     }
 
     private int GetPriorityForContent(ContentSectionType type, AnalysisTaskType taskType)

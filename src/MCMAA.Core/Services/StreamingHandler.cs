@@ -244,13 +244,13 @@ public class StreamingHandler : IStreamingHandler
         }
     }
 
-    public async Task<string> ProcessChunkAsync(
-        string chunk, 
-        StreamingContext context, 
+    public Task<string> ProcessChunkAsync(
+        string chunk,
+        StreamingContext context,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrEmpty(chunk))
-            return string.Empty;
+            return Task.FromResult(string.Empty);
 
         // Basic chunk processing - can be extended for more sophisticated handling
         var processedChunk = chunk;
@@ -261,7 +261,7 @@ public class StreamingHandler : IStreamingHandler
         // Ensure proper line endings
         processedChunk = processedChunk.Replace("\r\n", "\n").Replace("\r", "\n");
 
-        return processedChunk;
+        return Task.FromResult(processedChunk);
     }
 
     private string CreateProgressBar(double percentage)
