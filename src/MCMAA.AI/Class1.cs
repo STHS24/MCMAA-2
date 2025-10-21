@@ -265,36 +265,64 @@ public class OllamaAiAssistant : IAiAssistant
     /// <summary>
     /// Validates if a model exists and returns a fallback if not
     /// </summary>
-    private async Task<string> ValidateAndGetModelAsync(string requestedModel, CancellationToken cancellationToken = default)
-    {
-        var availableModels = await GetAvailableModelsAsync(cancellationToken);
-
-        // If requested model exists, use it
-        if (availableModels.ContainsKey(requestedModel))
+        private async Task<string> ValidateAndGetModelAsync(string requestedModel, CancellationToken cancellationToken = default)
         {
-            return requestedModel;
+            var availableModels = await GetAvailableModelsAsync(cancellationToken);
+
+            // If requested model exists, use it
+            if (availableModels.ContainsKey(requestedModel))
+            {
+                return requestedModel;
+            }
+
+            _logger.LogWarning("Requested model '{RequestedModel}' not found. Available models: {AvailableModels}",
+                requestedModel, string.Join(", ", availableModels.Keys));
+
+            // Fallback logic: try to find a suitable alternative
+            var fallbackModel = GetFallbackModel(requestedModel, availableModels.Keys.ToList());
+            
+            // Check available models with null safety
+            if (!string.IsNullOrEmpty(fallbackModel) && !availableModels.ContainsKey(fallbackModel))
+            {
+                // If fallback model not available, attempt direct model loading
+                fallbackModel = _aiConfig.Models.GetValueOrDefault("directlySpecified", "");
+                if (!string.IsNullOrEmpty(fallbackModel) && availableModels.ContainsKey(fallbackModel))
+                {
+                    return fallbackModel;
+                }
+            }
+
+            if (!string.IsNullOrEmpty(fallbackModel))
+            {
+                _logger.LogInformation("Using fallback model '{FallbackModel}' instead of '{RequestedModel}'",
+                    fallbackModel, requestedModel);
+
+                // Force warmup with specific delay and error handling
+                var warmupAttempt = 0;
+                while (warmupAttempt < 3)
+                {
+                    try 
+                    { 
+                        var warmedUp = await WarmupModelAsync(fallbackModel, cancellationToken);
+                        if (warmedUp) break;
+                    }
+                catch (Exception ex) when (warmupAttempt < 2)
+                {
+                    _logger.LogDebug(ex, "Warmup attempt {WarmupAttempt} failed for model {FallbackModel}", warmupAttempt, fallbackModel);
+                    warmupAttempt++;
+                    var waitTime = _timeoutConfig.BaseDelayMs * warmupAttempt;
+                    _logger.LogDebug("Waiting {WaitTime}ms for model {FallbackModel} to warm up",
+                        waitTime, fallbackModel);
+                    await Task.Delay(waitTime, cancellationToken);
+                    }
+                }
+
+                return fallbackModel;
+            }
+
+            // If no fallback found, throw an exception
+            throw new InvalidOperationException($"Model '{requestedModel}' not found and no viable fallback available. Available models: {string.Join(", ", availableModels.Keys)}");
         }
-
-        _logger.LogWarning("Requested model '{RequestedModel}' not found. Available models: {AvailableModels}",
-            requestedModel, string.Join(", ", availableModels.Keys));
-
-        // Fallback logic: try to find a suitable alternative
-        var fallbackModel = GetFallbackModel(requestedModel, availableModels.Keys.ToList());
-
-        if (!string.IsNullOrEmpty(fallbackModel))
-        {
-            _logger.LogInformation("Using fallback model '{FallbackModel}' instead of '{RequestedModel}'",
-                fallbackModel, requestedModel);
-
-            // Try to warm up the fallback model
-            await WarmupModelAsync(fallbackModel, cancellationToken);
-
-            return fallbackModel;
-        }
-
-        // If no fallback found, throw an exception
-        throw new InvalidOperationException($"Model '{requestedModel}' not found and no suitable fallback available. Available models: {string.Join(", ", availableModels.Keys)}");
-    }
 
     /// <summary>
     /// Executes an operation with retry logic for transient failures
@@ -598,59 +626,115 @@ public class OllamaAiAssistant : IAiAssistant
                 }
 
                 var timeout = GetTimeoutForTask(task.TimeoutCategory);
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                cts.CancelAfter(TimeSpan.FromSeconds(timeout));
-
-                var requestJson = JsonSerializer.Serialize(ollamaRequest);
-                var requestContent = new StringContent(requestJson, Encoding.UTF8, "application/json");
-
-                var response = await session.HttpClient.PostAsync("/api/generate", requestContent, cts.Token);
-
-                // For streaming requests, check status code manually to avoid premature connection termination
-                if (!response.IsSuccessStatusCode)
+                // Add retry logic for premature response termination
+                bool retryNeeded = true;
+                int retryCount = 0;
+                while (retryNeeded && retryCount < 2)
                 {
-                    var errorContent = await response.Content.ReadAsStringAsync(cts.Token);
-                    throw new HttpRequestException($"Ollama API returned {response.StatusCode}: {errorContent}");
-                }
-
-            var contentBuilder = new StringBuilder();
-            using var stream = await response.Content.ReadAsStreamAsync(cts.Token);
-            using var reader = new StreamReader(stream);
-
-            string? line;
-            while ((line = await reader.ReadLineAsync()) != null && !cts.Token.IsCancellationRequested)
-            {
-                if (string.IsNullOrWhiteSpace(line))
-                    continue;
-
-                try
-                {
-                    var streamResponse = JsonSerializer.Deserialize<OllamaResponse>(line);
-                    if (streamResponse != null && !string.IsNullOrEmpty(streamResponse.Response))
+                    try
                     {
-                        contentBuilder.Append(streamResponse.Response);
-                        onChunk(streamResponse.Response);
-
-                        if (streamResponse.Done)
+                        // Initialize timeout handling based on retry count
+                        var adjustedTimeout = timeout + (5 * retryCount); // Increase by 5 seconds per retry
+                        _logger.LogInformation("Attempting streaming request{RetryStatus} with timeout: {TimeoutSeconds}s",
+                            retryCount == 0 ? "" : $" (Retry {retryCount})",
+                            adjustedTimeout);
+                        var adjustedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                        adjustedCts.CancelAfter(TimeSpan.FromSeconds(adjustedTimeout));
+                        try
                         {
-                            result.TokensUsed = streamResponse.EvalCount + streamResponse.PromptEvalCount;
-                            break;
+                            var requestJson = JsonSerializer.Serialize(ollamaRequest);
+                            var requestContent = new StringContent(requestJson, Encoding.UTF8, "application/json");
+
+                            // Capture detailed error information
+                            var requestStart = DateTime.UtcNow;
+                            _logger.LogDebug("Sending streaming request to Ollama API");
+                            var response = await session.HttpClient.PostAsync("/api/generate", requestContent, adjustedCts.Token);
+                            _logger.LogDebug("Received HTTP {StatusCode} after {Duration}ms",
+                                response.StatusCode, (DateTime.UtcNow - requestStart).TotalMilliseconds);
+
+                            // For streaming requests, check status code manually
+                            if (!response.IsSuccessStatusCode)
+                            {
+                                var errorContent = await response.Content.ReadAsStringAsync(adjustedCts.Token);
+                                throw new HttpRequestException($"Ollama API returned {response.StatusCode}: {errorContent}");
+                            }
+
+                            var contentBuilder = new StringBuilder();
+                            using var stream = await response.Content.ReadAsStreamAsync(adjustedCts.Token);
+                            using var reader = new StreamReader(stream);
+
+                            string? line;
+                            var lastChunkTime = DateTime.UtcNow;
+                            while ((line = await reader.ReadLineAsync()) != null && !adjustedCts.Token.IsCancellationRequested)
+                            {
+                                var chunkTime = DateTime.UtcNow;
+                                if ((chunkTime - lastChunkTime) > TimeSpan.FromSeconds(10))
+                                {
+                                    _logger.LogDebug("Chunk received after {Duration}ms delay",
+                                        (chunkTime - lastChunkTime).TotalMilliseconds);
+                                }
+                                lastChunkTime = chunkTime;
+
+                                if (string.IsNullOrWhiteSpace(line))
+                                    continue;
+
+                                try
+                                {
+                                    var streamResponse = JsonSerializer.Deserialize<OllamaResponse>(line);
+                                    if (streamResponse != null && !string.IsNullOrEmpty(streamResponse.Response))
+                                    {
+                                        contentBuilder.Append(streamResponse.Response);
+                                        onChunk(streamResponse.Response);
+
+                                        if (streamResponse.Done)
+                                        {
+                                            result.TokensUsed = streamResponse.EvalCount + streamResponse.PromptEvalCount;
+                                            break;
+                                        }
+                                    }
+                                }
+                                catch (JsonException ex)
+                                {
+                                    _logger.LogWarning(ex, "Failed to parse streaming response line: {Line}", line);
+                                }
+                            }
+
+                            result.Content = contentBuilder.ToString();
+
+                            // Update session statistics
+                            session.RequestCount++;
+                            session.TotalDuration += DateTime.UtcNow - startTime;
+
+                            retryNeeded = false; // Success - exit retry loop
+                        }
+                        finally
+                        {
+                            adjustedCts.Dispose();
                         }
                     }
+                    catch (HttpRequestException ex) when (ex.Message.Contains("prematurely") || ex.Message.Contains("terminated"))
+                    {
+                        retryCount++;
+                        if (retryCount >= 2)
+                            throw;
+
+                        _logger.LogWarning("Response ended prematurely (attempt {RetryCount}/2). Increasing timeout and retrying...",
+                            retryCount);
+                        await Task.Delay(1000 * 2 * retryCount, cancellationToken); // Exponential backoff
+                    }
+                    catch (IOException ex)
+                    {
+                        retryCount++;
+                        if (retryCount >= 2)
+                            throw;
+
+                        _logger.LogWarning("I/O error during streaming (attempt {RetryCount}/2): {Message}. Retrying...",
+                            retryCount, ex.Message);
+                        await Task.Delay(1000 * 2 * retryCount, cancellationToken);
+                    }
                 }
-                catch (JsonException ex)
-                {
-                    _logger.LogWarning(ex, "Failed to parse streaming response line: {Line}", line);
-                }
-            }
 
-                result.Content = contentBuilder.ToString();
-
-                // Update session statistics
-                session.RequestCount++;
-                session.TotalDuration += DateTime.UtcNow - startTime;
-
-                // Cache the result
+                // Cache the result after successful streaming
                 if (!string.IsNullOrEmpty(result.Content))
                 {
                     await _cacheService.SetAsync(cacheKey, result.Content, cancellationToken: cancellationToken);
