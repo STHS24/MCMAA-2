@@ -265,18 +265,37 @@ class Program
             Console.WriteLine();
             Console.WriteLine("✅ AI analysis completed successfully!");
 
-            // Save output if requested
-            if (!string.IsNullOrEmpty(output))
-            {
-                await SaveAnalysisResult(analysisResult, output);
-                Console.WriteLine($"💾 Analysis saved to: {output}");
-            }
+// Determine output path
+string outputPath;
+if (!string.IsNullOrEmpty(output))
+{
+    // Use user-specified path
+    outputPath = output;
+}
+else
+{
+    // Generate default path in project root's output directory
+    string modpackName = Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar));
+    // Sanitize filename (remove invalid characters)
+    modpackName = new string(modpackName.Where(c => !char.IsWhiteSpace(c) && (char.IsLetterOrDigit(c) || c == '_' || c == '-')).ToArray());
+    modpackName = string.IsNullOrEmpty(modpackName) ? "modpack" : modpackName;
+    
+    // Use project root's output directory
+    string outputBase = Path.Combine(Directory.GetCurrentDirectory(), "output");
+    Directory.CreateDirectory(outputBase);
+    
+    outputPath = Path.Combine(outputBase, $"ai-analysis-{modpackName}.md");
+}
 
-            // Show statistics if requested
-            if (stats)
-            {
-                await ShowStatistics(analysisResult, cacheService);
-            }
+// Save analysis result to determined path
+await SaveAnalysisResult(analysisResult, outputPath);
+Console.WriteLine($"💾 Analysis saved to: {outputPath}");
+
+// Show statistics if requested
+if (stats)
+{
+    await ShowStatistics(analysisResult, cacheService);
+}
 
             // Show metrics if requested
             if (metrics)

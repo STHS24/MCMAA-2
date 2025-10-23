@@ -110,7 +110,6 @@ dotnet run --project src/MCMAA.CLI -- /path/to/modpack --export-metrics metrics.
 ### Options
 - `--task <type>` - Analysis task type: `quick`, `full`, `conflicts`, `performance`, `summary` (default: `quick`)
 - `--model <name>` - Ollama model to use (default: auto-detect best available)
-- `--output <file>` - Save analysis results to file (JSON format)
 - `--no-cache` - Disable response caching for this run
 - `--clear-cache` - Clear all cached responses before analysis
 - `--no-streaming` - Disable real-time streaming output
@@ -125,7 +124,6 @@ dotnet run --project src/MCMAA.CLI -- /path/to/modpack --export-metrics metrics.
 dotnet run --project src/MCMAA.CLI -- ./my-modpack \
   --task full \
   --model llama2:7b \
-  --output results.json \
   --metrics \
   --stats \
   --export-metrics metrics.json
@@ -139,7 +137,6 @@ dotnet run --project src/MCMAA.CLI -- ./my-modpack \
 # Performance optimization analysis
 dotnet run --project src/MCMAA.CLI -- ./my-modpack \
   --task performance \
-  --output performance-report.json
 ```
 
 ## 🏗️ Architecture
@@ -155,7 +152,8 @@ MCMAA-2/
 │   ├── MCMAA.AI/           # AI integration and session management
 │   └── MCMAA.Tests/        # Unit and integration tests
 ├── docs/                   # Documentation
-├── examples/              # Example configurations and outputs
+├── examples/              # Example configurations
+├── output/                  # AI Analysis output
 └── README.md
 ```
 
