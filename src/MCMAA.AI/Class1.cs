@@ -86,6 +86,10 @@ public class OllamaAiAssistant : IAiAssistant
     private readonly IContentPreprocessor _contentPreprocessor;
     private readonly IStreamingHandler _streamingHandler;
 
+    // Cache for available models to avoid repeated API calls
+    private Dictionary<string, string>? _cachedModels;
+    private DateTime _modelsCacheExpiry = DateTime.MinValue;
+
     public OllamaAiAssistant(
         ILogger<OllamaAiAssistant> logger,
         IOptions<AiConfiguration> aiConfig,
@@ -143,6 +147,12 @@ public class OllamaAiAssistant : IAiAssistant
 
     public async Task<Dictionary<string, string>> GetAvailableModelsAsync(CancellationToken cancellationToken = default)
     {
+        // Return cached models if still valid (cache for 5 minutes)
+        if (_cachedModels != null && DateTime.UtcNow < _modelsCacheExpiry)
+        {
+            return _cachedModels;
+        }
+
         try
         {
             var session = await _sessionManager.GetSessionAsync("phi3:mini", cancellationToken);
@@ -151,7 +161,12 @@ public class OllamaAiAssistant : IAiAssistant
                 if (session.HttpClient == null) return new Dictionary<string, string>();
 
                 var response = await session.HttpClient.GetAsync("/api/tags", cancellationToken);
-                response.EnsureSuccessStatusCode();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var errorContent = await response.Content.ReadAsStringAsync(cancellationToken);
+                    throw new HttpRequestException($"Ollama API returned {response.StatusCode}: {errorContent}");
+                }
 
                 var content = await response.Content.ReadAsStringAsync(cancellationToken);
                 var modelsResponse = JsonSerializer.Deserialize<JsonElement>(content);
@@ -169,9 +184,13 @@ public class OllamaAiAssistant : IAiAssistant
                             {
                                 models[name] = name;
                             }
+                        }
                     }
                 }
-            }
+
+                // Cache the results
+                _cachedModels = models;
+                _modelsCacheExpiry = DateTime.UtcNow.AddMinutes(5);
 
                 return models;
             }
@@ -183,8 +202,167 @@ public class OllamaAiAssistant : IAiAssistant
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to get available models");
-            return new Dictionary<string, string>();
+            return _cachedModels ?? new Dictionary<string, string>();
         }
+    }
+
+    /// <summary>
+    /// Warms up a model by sending a simple request to ensure it's loaded
+    /// </summary>
+    private async Task<bool> WarmupModelAsync(string model, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            _logger.LogDebug("Warming up model {Model}", model);
+
+            var session = await _sessionManager.GetSessionAsync(model, cancellationToken);
+            try
+            {
+                if (session.HttpClient == null) return false;
+
+                var warmupRequest = new OllamaRequest
+                {
+                    Model = model,
+                    Prompt = "Hello", // Simple prompt for warmup
+                    Stream = false,
+                    Options = new OllamaOptions
+                    {
+                        Temperature = 0.1,
+                        NumPredict = 1 // Minimal response
+                    }
+                };
+
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30)); // Short timeout for warmup
+                var requestJson = JsonSerializer.Serialize(warmupRequest);
+                var requestContent = new StringContent(requestJson, Encoding.UTF8, "application/json");
+
+                var response = await session.HttpClient.PostAsync("/api/generate", requestContent, cts.Token);
+                var success = response.IsSuccessStatusCode;
+
+                if (success)
+                {
+                    _logger.LogDebug("Model {Model} warmed up successfully", model);
+                }
+                else
+                {
+                    _logger.LogDebug("Model {Model} warmup failed with status {StatusCode}", model, response.StatusCode);
+                }
+
+                return success;
+            }
+            finally
+            {
+                await _sessionManager.ReleaseSessionAsync(session, cancellationToken);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Model {Model} warmup failed", model);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Validates if a model exists and returns a fallback if not
+    /// </summary>
+    private async Task<string> ValidateAndGetModelAsync(string requestedModel, CancellationToken cancellationToken = default)
+    {
+        var availableModels = await GetAvailableModelsAsync(cancellationToken);
+
+        // If requested model exists, use it
+        if (availableModels.ContainsKey(requestedModel))
+        {
+            return requestedModel;
+        }
+
+        _logger.LogWarning("Requested model '{RequestedModel}' not found. Available models: {AvailableModels}",
+            requestedModel, string.Join(", ", availableModels.Keys));
+
+        // Fallback logic: try to find a suitable alternative
+        var fallbackModel = GetFallbackModel(requestedModel, availableModels.Keys.ToList());
+
+        if (!string.IsNullOrEmpty(fallbackModel))
+        {
+            _logger.LogInformation("Using fallback model '{FallbackModel}' instead of '{RequestedModel}'",
+                fallbackModel, requestedModel);
+
+            // Try to warm up the fallback model
+            await WarmupModelAsync(fallbackModel, cancellationToken);
+
+            return fallbackModel;
+        }
+
+        // If no fallback found, throw an exception
+        throw new InvalidOperationException($"Model '{requestedModel}' not found and no suitable fallback available. Available models: {string.Join(", ", availableModels.Keys)}");
+    }
+
+    /// <summary>
+    /// Executes an operation with retry logic for transient failures
+    /// </summary>
+    private async Task<T> ExecuteWithRetryAsync<T>(Func<Task<T>> operation, int maxRetries = 2, CancellationToken cancellationToken = default)
+    {
+        var attempt = 0;
+        while (attempt <= maxRetries)
+        {
+            try
+            {
+                return await operation();
+            }
+            catch (HttpRequestException ex) when (IsTransientError(ex) && attempt < maxRetries)
+            {
+                attempt++;
+                var delay = TimeSpan.FromMilliseconds(_timeoutConfig.BaseDelayMs * Math.Pow(2, attempt - 1));
+                _logger.LogWarning("Attempt {Attempt} failed with transient error: {Error}. Retrying in {Delay}ms",
+                    attempt, ex.Message, delay.TotalMilliseconds);
+
+                await Task.Delay(delay, cancellationToken);
+            }
+        }
+
+        // This should never be reached due to the loop logic, but satisfies the compiler
+        throw new InvalidOperationException("Retry logic failed unexpectedly");
+    }
+
+    /// <summary>
+    /// Determines if an error is transient and worth retrying
+    /// </summary>
+    private static bool IsTransientError(HttpRequestException ex)
+    {
+        return ex.Message.Contains("InternalServerError") ||
+               ex.Message.Contains("BadGateway") ||
+               ex.Message.Contains("ServiceUnavailable") ||
+               ex.Message.Contains("GatewayTimeout");
+    }
+
+    /// <summary>
+    /// Gets a fallback model based on the requested model characteristics
+    /// </summary>
+    private string? GetFallbackModel(string requestedModel, List<string> availableModels)
+    {
+        // If no models available, return null
+        if (!availableModels.Any()) return null;
+
+        // Fallback priority based on model characteristics
+        var fallbackPriority = new[]
+        {
+            "phi3:mini",                           // Lightweight, reliable
+            "phi3:3.8b-mini-4k-instruct-q4_0",   // More capable phi3
+            "llama2:7b",                          // Common fallback
+            "llama2:13b",                         // Larger fallback
+            "mistral:7b",                         // Alternative architecture
+        };
+
+        // Try each fallback in order
+        foreach (var fallback in fallbackPriority)
+        {
+            if (availableModels.Contains(fallback))
+            {
+                return fallback;
+            }
+        }
+
+        // If no priority fallbacks found, return the first available model
+        return availableModels.FirstOrDefault();
     }
 
     public async Task<AiAnalysisResult> AnalyzeAsync(
@@ -194,7 +372,10 @@ public class OllamaAiAssistant : IAiAssistant
         CancellationToken cancellationToken = default)
     {
         var startTime = DateTime.UtcNow;
-        var model = modelOverride ?? GetRecommendedModel(task.Type);
+
+        // Determine and validate model to use
+        var requestedModel = modelOverride ?? GetRecommendedModel(task.Type);
+        var model = await ValidateAndGetModelAsync(requestedModel, cancellationToken);
 
         _logger.LogInformation("Starting AI analysis with model {Model} for task {TaskType}", model, task.Type);
 
@@ -253,6 +434,7 @@ public class OllamaAiAssistant : IAiAssistant
                 }
 
                 var timeout = GetTimeoutForTask(task.TimeoutCategory);
+                _logger.LogDebug("Using timeout of {Timeout} seconds for task category {Category}", timeout, task.TimeoutCategory);
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 cts.CancelAfter(TimeSpan.FromSeconds(timeout));
 
@@ -260,7 +442,13 @@ public class OllamaAiAssistant : IAiAssistant
                 var requestContent = new StringContent(requestJson, Encoding.UTF8, "application/json");
 
                 var response = await session.HttpClient.PostAsync("/api/generate", requestContent, cts.Token);
-                response.EnsureSuccessStatusCode();
+
+                // Check status code and provide detailed error information
+                if (!response.IsSuccessStatusCode)
+                {
+                    var errorContent = await response.Content.ReadAsStringAsync(cts.Token);
+                    throw new HttpRequestException($"Ollama API returned {response.StatusCode}: {errorContent}");
+                }
 
                 var responseContent = await response.Content.ReadAsStringAsync(cts.Token);
                 var ollamaResponse = JsonSerializer.Deserialize<OllamaResponse>(responseContent);
@@ -289,6 +477,30 @@ public class OllamaAiAssistant : IAiAssistant
                 await _sessionManager.ReleaseSessionAsync(session, cancellationToken);
             }
         }
+        catch (HttpRequestException ex) when (ex.Message.Contains("llama runner process has terminated"))
+        {
+            _logger.LogWarning(ex, "Ollama process terminated, this may be due to resource constraints");
+            result.Success = false;
+            result.Errors.Add("AI service temporarily unavailable due to resource constraints. Try reducing the complexity of your request or try again later.");
+        }
+        catch (HttpRequestException ex) when (ex.Message.Contains("InternalServerError"))
+        {
+            _logger.LogWarning(ex, "Ollama internal server error");
+            result.Success = false;
+            result.Errors.Add($"AI service error: {ex.Message}. This may be temporary - try again in a few moments.");
+        }
+        catch (TaskCanceledException ex) when (ex.Message.Contains("HttpClient.Timeout"))
+        {
+            _logger.LogWarning(ex, "Request timed out due to HttpClient timeout");
+            result.Success = false;
+            result.Errors.Add("Request timed out. The model may be loading or processing a complex request. Try again in a few moments or use a simpler task.");
+        }
+        catch (OperationCanceledException ex) when (ex.Message.Contains("timeout"))
+        {
+            _logger.LogWarning(ex, "Request timed out due to custom timeout");
+            result.Success = false;
+            result.Errors.Add("Request timed out. The model may be loading or processing a complex request. Try again in a few moments or use a simpler task.");
+        }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             result.Success = false;
@@ -313,7 +525,10 @@ public class OllamaAiAssistant : IAiAssistant
         CancellationToken cancellationToken = default)
     {
         var startTime = DateTime.UtcNow;
-        var model = modelOverride ?? GetRecommendedModel(task.Type);
+
+        // Determine and validate model to use
+        var requestedModel = modelOverride ?? GetRecommendedModel(task.Type);
+        var model = await ValidateAndGetModelAsync(requestedModel, cancellationToken);
 
         _logger.LogInformation("Starting streaming AI analysis with model {Model} for task {TaskType}", model, task.Type);
 
@@ -390,7 +605,13 @@ public class OllamaAiAssistant : IAiAssistant
                 var requestContent = new StringContent(requestJson, Encoding.UTF8, "application/json");
 
                 var response = await session.HttpClient.PostAsync("/api/generate", requestContent, cts.Token);
-                response.EnsureSuccessStatusCode();
+
+                // For streaming requests, check status code manually to avoid premature connection termination
+                if (!response.IsSuccessStatusCode)
+                {
+                    var errorContent = await response.Content.ReadAsStringAsync(cts.Token);
+                    throw new HttpRequestException($"Ollama API returned {response.StatusCode}: {errorContent}");
+                }
 
             var contentBuilder = new StringBuilder();
             using var stream = await response.Content.ReadAsStreamAsync(cts.Token);
@@ -440,6 +661,35 @@ public class OllamaAiAssistant : IAiAssistant
             {
                 await _sessionManager.ReleaseSessionAsync(session, cancellationToken);
             }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            result.Success = false;
+            result.Errors.Add("Streaming analysis was cancelled");
+        }
+        catch (HttpRequestException ex) when (ex.Message.Contains("llama runner process has terminated"))
+        {
+            _logger.LogWarning(ex, "Ollama process terminated, this may be due to resource constraints");
+            result.Success = false;
+            result.Errors.Add("AI service temporarily unavailable due to resource constraints. Try reducing the complexity of your request or try again later.");
+        }
+        catch (HttpRequestException ex) when (ex.Message.Contains("InternalServerError"))
+        {
+            _logger.LogWarning(ex, "Ollama internal server error");
+            result.Success = false;
+            result.Errors.Add($"AI service error: {ex.Message}. This may be temporary - try again in a few moments.");
+        }
+        catch (TaskCanceledException ex) when (ex.Message.Contains("HttpClient.Timeout"))
+        {
+            _logger.LogWarning(ex, "Streaming request timed out due to HttpClient timeout");
+            result.Success = false;
+            result.Errors.Add("Streaming request timed out. The model may be loading or processing a complex request. Try again in a few moments or use a simpler task.");
+        }
+        catch (OperationCanceledException ex) when (ex.Message.Contains("timeout"))
+        {
+            _logger.LogWarning(ex, "Streaming request timed out due to custom timeout");
+            result.Success = false;
+            result.Errors.Add("Streaming request timed out. The model may be loading or processing a complex request. Try again in a few moments or use a simpler task.");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -595,11 +845,12 @@ Focus on actionable performance improvements.",
 
     private int GetTimeoutForTask(TimeoutCategory category)
     {
+        // Allow longer timeouts for model loading and processing
         return category switch
         {
-            TimeoutCategory.Standard => _timeoutConfig.RequestStandard,
-            TimeoutCategory.Large => _timeoutConfig.RequestLarge,
-            TimeoutCategory.Complex => _timeoutConfig.RequestComplex,
+            TimeoutCategory.Standard => _timeoutConfig.RequestStandard,    // 3 minutes
+            TimeoutCategory.Large => _timeoutConfig.RequestLarge,          // 5 minutes
+            TimeoutCategory.Complex => _timeoutConfig.RequestComplex,      // 8 minutes
             _ => _timeoutConfig.RequestStandard
         };
     }

@@ -38,21 +38,21 @@ public class OllamaSessionManager : ISessionManager, IDisposable
         _timeoutConfig = timeoutConfig.Value;
         _httpClientFactory = httpClientFactory;
 
-        // Start health check timer (every 5 minutes)
-        _healthCheckTimer = new Timer(async _ => await CheckHealthAsync(), null, 
-            TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+        // Start health check timer (every 15 minutes to reduce overhead)
+        _healthCheckTimer = new Timer(async _ => await CheckHealthAsync(), null,
+            TimeSpan.FromMinutes(15), TimeSpan.FromMinutes(15));
 
-        // Start cleanup timer (every 10 minutes)
+        // Start cleanup timer (every 5 minutes for more aggressive cleanup)
         _cleanupTimer = new Timer(async _ => await CleanupAsync(), null,
-            TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(10));
+            TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
 
         _logger.LogDebug("Session manager initialized");
     }
 
     public async Task<OllamaSession> GetSessionAsync(string model, CancellationToken cancellationToken = default)
     {
-        // Get or create semaphore for this model
-        var semaphore = _modelSemaphores.GetOrAdd(model, _ => new SemaphoreSlim(3, 3)); // Max 3 concurrent sessions per model
+        // Get or create semaphore for this model (reduced to 1 to prevent resource exhaustion)
+        var semaphore = _modelSemaphores.GetOrAdd(model, _ => new SemaphoreSlim(1, 1)); // Max 1 concurrent session per model
         
         await semaphore.WaitAsync(cancellationToken);
         
@@ -188,9 +188,9 @@ public class OllamaSessionManager : ISessionManager, IDisposable
         }
     }
 
-    public async Task CleanupAsync(CancellationToken cancellationToken = default)
+    public Task CleanupAsync(CancellationToken cancellationToken = default)
     {
-        var cutoffTime = DateTime.UtcNow.AddMinutes(-30); // Remove sessions unused for 30 minutes
+        var cutoffTime = DateTime.UtcNow.AddMinutes(-10); // Remove sessions unused for 10 minutes (more aggressive)
         var sessionsToRemove = new List<string>();
 
         foreach (var kvp in _sessions)
@@ -226,13 +226,16 @@ public class OllamaSessionManager : ISessionManager, IDisposable
         }
 
         _logger.LogDebug("Cleanup completed: removed {Count} sessions", sessionsToRemove.Count);
+        return Task.CompletedTask;
     }
 
     private async Task<OllamaSession> CreateSessionAsync(string model, CancellationToken cancellationToken)
     {
         var httpClient = _httpClientFactory.CreateClient();
         httpClient.BaseAddress = new Uri(_aiConfig.OllamaBaseUrl);
-        httpClient.Timeout = TimeSpan.FromSeconds(_timeoutConfig.RequestStandard);
+        // Set HttpClient timeout to be longer than our custom timeouts to avoid conflicts
+        // Use the longest possible timeout plus buffer for model loading
+        httpClient.Timeout = TimeSpan.FromSeconds(Math.Max(_timeoutConfig.RequestComplex + 120, 600)); // At least 10 minutes
 
         var session = new OllamaSession
         {

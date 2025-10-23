@@ -104,11 +104,11 @@ public class ModpackScanner : IModpackScanner
         return result;
     }
 
-    private async Task ScanModsAsync(string basePath, ScanResult result, CancellationToken cancellationToken)
+    private Task ScanModsAsync(string basePath, ScanResult result, CancellationToken cancellationToken)
     {
         var modsPath = Path.Combine(basePath, "mods");
         if (!Directory.Exists(modsPath))
-            return;
+            return Task.CompletedTask;
 
         _logger.LogDebug("Scanning mods directory: {ModsPath}", modsPath);
 
@@ -142,6 +142,7 @@ public class ModpackScanner : IModpackScanner
         }
 
         _logger.LogDebug("Found {ModCount} mods", result.Mods.Count);
+        return Task.CompletedTask;
     }
 
     private async Task ScanConfigFilesAsync(string basePath, ScanResult result, CancellationToken cancellationToken)
@@ -201,7 +202,7 @@ public class ModpackScanner : IModpackScanner
         }
     }
 
-    private async Task ScanResourcePacksAsync(string basePath, ScanResult result, CancellationToken cancellationToken)
+    private Task ScanResourcePacksAsync(string basePath, ScanResult result, CancellationToken cancellationToken)
     {
         var resourcePackPaths = new[] { "resourcepacks", "shaderpacks" };
 
@@ -247,6 +248,7 @@ public class ModpackScanner : IModpackScanner
         }
 
         _logger.LogDebug("Found {PackCount} resource packs", result.ResourcePacks.Count);
+        return Task.CompletedTask;
     }
 
     private async Task<string> GetFilePreviewAsync(string filePath, int maxLines)
