@@ -5,6 +5,9 @@
 # .NET Build Output
 ###################
 
+# Developer Helpers
+DEVELOPER_GUIDE.md
+ 
 # Build results
 [Dd]ebug/
 [Dd]ebugPublic/
