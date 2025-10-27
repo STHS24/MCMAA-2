@@ -13,12 +13,14 @@ public interface IAiAssistant
     /// <param name="scanResult">The scan result to analyze</param>
     /// <param name="task">The analysis task to perform</param>
     /// <param name="modelOverride">Optional model override</param>
+    /// <param name="skipCache">Skip cache and force fresh analysis</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>AI analysis result</returns>
     Task<AiAnalysisResult> AnalyzeAsync(
-        ScanResult scanResult, 
-        AnalysisTask task, 
+        ScanResult scanResult,
+        AnalysisTask task,
         string? modelOverride = null,
+        bool skipCache = false,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -28,6 +30,7 @@ public interface IAiAssistant
     /// <param name="task">The analysis task to perform</param>
     /// <param name="onChunk">Callback for streaming chunks</param>
     /// <param name="modelOverride">Optional model override</param>
+    /// <param name="skipCache">Skip cache and force fresh analysis</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>AI analysis result</returns>
     Task<AiAnalysisResult> AnalyzeStreamingAsync(
@@ -35,6 +38,7 @@ public interface IAiAssistant
         AnalysisTask task,
         Action<string> onChunk,
         string? modelOverride = null,
+        bool skipCache = false,
         CancellationToken cancellationToken = default);
 
     /// <summary>

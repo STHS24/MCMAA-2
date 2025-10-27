@@ -11,8 +11,8 @@ public class AiConfiguration
     public Dictionary<string, string> Models { get; set; } = new()
     {
         ["lightweight"] = "phi3:mini",
-        ["standard"] = "qwen2.5-coder",
-        ["advanced"] = "qwen2.5:14b"
+        ["standard"] = "phi3:mini",
+        ["advanced"] = "phi3:3.8b-mini-4k-instruct-q4_0"
     };
 
     /// <summary>
@@ -24,7 +24,7 @@ public class AiConfiguration
         ["quick"] = "lightweight",
         ["conflicts"] = "standard",
         ["performance"] = "standard",
-        ["full"] = "standard"
+        ["full"] = "advanced"
     };
 
     /// <summary>

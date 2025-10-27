@@ -369,6 +369,7 @@ public class OllamaAiAssistant : IAiAssistant
         ScanResult scanResult,
         AnalysisTask task,
         string? modelOverride = null,
+        bool skipCache = false,
         CancellationToken cancellationToken = default)
     {
         var startTime = DateTime.UtcNow;
@@ -397,18 +398,26 @@ public class OllamaAiAssistant : IAiAssistant
             // Generate prompt with preprocessed content
             var prompt = GeneratePromptWithPreprocessedContent(preprocessedContent, task);
 
-            // Check cache first
+            // Check cache first (unless skipped)
             var cacheKey = _cacheService.GenerateKey(prompt, model, _aiConfig.DefaultTemperature, task.Type.ToString());
-            var cachedResult = await _cacheService.GetAsync<string>(cacheKey, cancellationToken);
 
-            if (cachedResult != null)
+            if (!skipCache)
             {
-                _logger.LogDebug("Using cached result for analysis");
-                result.Content = cachedResult;
-                result.FromCache = true;
-                result.CacheKey = cacheKey;
-                result.Duration = DateTime.UtcNow - startTime;
-                return result;
+                var cachedResult = await _cacheService.GetAsync<string>(cacheKey, cancellationToken);
+
+                if (cachedResult != null)
+                {
+                    _logger.LogDebug("Using cached result for analysis");
+                    result.Content = cachedResult;
+                    result.FromCache = true;
+                    result.CacheKey = cacheKey;
+                    result.Duration = DateTime.UtcNow - startTime;
+                    return result;
+                }
+            }
+            else
+            {
+                _logger.LogDebug("Cache skipped for this analysis");
             }
 
             // Perform AI analysis
@@ -522,6 +531,7 @@ public class OllamaAiAssistant : IAiAssistant
         AnalysisTask task,
         Action<string> onChunk,
         string? modelOverride = null,
+        bool skipCache = false,
         CancellationToken cancellationToken = default)
     {
         var startTime = DateTime.UtcNow;
@@ -551,28 +561,36 @@ public class OllamaAiAssistant : IAiAssistant
             // Generate prompt with preprocessed content
             var prompt = GeneratePromptWithPreprocessedContent(preprocessedContent, task);
 
-            // Check cache first
+            // Check cache first (unless skipped)
             var cacheKey = _cacheService.GenerateKey(prompt, model, _aiConfig.DefaultTemperature, task.Type.ToString());
-            var cachedResult = await _cacheService.GetAsync<string>(cacheKey, cancellationToken);
 
-            if (cachedResult != null)
+            if (!skipCache)
             {
-                _logger.LogDebug("Using cached result for streaming analysis");
-                result.Content = cachedResult;
-                result.FromCache = true;
-                result.CacheKey = cacheKey;
-                result.Duration = DateTime.UtcNow - startTime;
+                var cachedResult = await _cacheService.GetAsync<string>(cacheKey, cancellationToken);
 
-                // Simulate streaming for cached content using enhanced streaming
-                var streamingOptions = new StreamingOptions
+                if (cachedResult != null)
                 {
-                    ShowProgress = false,
-                    OnChunk = onChunk
-                };
+                    _logger.LogDebug("Using cached result for streaming analysis");
+                    result.Content = cachedResult;
+                    result.FromCache = true;
+                    result.CacheKey = cacheKey;
+                    result.Duration = DateTime.UtcNow - startTime;
 
-                var chunks = cachedResult.ToChunkedStream(50, TimeSpan.FromMilliseconds(10));
-                await _streamingHandler.ProcessStreamAsync(chunks, streamingOptions, cancellationToken);
-                return result;
+                    // Simulate streaming for cached content using enhanced streaming
+                    var streamingOptions = new StreamingOptions
+                    {
+                        ShowProgress = false,
+                        OnChunk = onChunk
+                    };
+
+                    var chunks = cachedResult.ToChunkedStream(50, TimeSpan.FromMilliseconds(10));
+                    await _streamingHandler.ProcessStreamAsync(chunks, streamingOptions, cancellationToken);
+                    return result;
+                }
+            }
+            else
+            {
+                _logger.LogDebug("Cache skipped for this streaming analysis");
             }
 
             // Perform streaming AI analysis

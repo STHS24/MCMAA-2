@@ -13,7 +13,8 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddMcmaaAI(this IServiceCollection services)
     {
-        services.AddScoped<IAiAssistant, OllamaAiAssistant>();
+        // Register as Singleton to maintain connection pooling and session management
+        services.AddSingleton<IAiAssistant, OllamaAiAssistant>();
 
         return services;
     }

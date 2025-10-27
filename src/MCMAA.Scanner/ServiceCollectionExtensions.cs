@@ -13,8 +13,9 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddMcmaaScanner(this IServiceCollection services)
     {
-        services.AddScoped<IModpackScanner, ModpackScanner>();
-        
+        // Register as Singleton since ModpackScanner is stateless
+        services.AddSingleton<IModpackScanner, ModpackScanner>();
+
         return services;
     }
 }

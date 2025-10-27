@@ -1,4 +1,4 @@
-﻿using MCMAA.Core.Interfaces;
+using MCMAA.Core.Interfaces;
 using MCMAA.Core.Models;
 using Microsoft.Extensions.Logging;
 using System.Text;
@@ -166,39 +166,60 @@ public class ModpackScanner : IModpackScanner
     {
         var allFiles = Directory.GetFiles(configPath, "*", SearchOption.AllDirectories);
 
-        foreach (var file in allFiles)
+        // Filter to supported files first
+        var supportedFiles = allFiles
+            .Where(f => SupportedExtensions.ContainsKey(Path.GetExtension(f).ToLowerInvariant()))
+            .ToList();
+
+        // Process files in parallel with limited concurrency to avoid overwhelming I/O
+        var options = new ParallelOptions
         {
-            if (cancellationToken.IsCancellationRequested)
-                break;
+            MaxDegreeOfParallelism = Math.Min(Environment.ProcessorCount, 4),
+            CancellationToken = cancellationToken
+        };
 
-            var extension = Path.GetExtension(file).ToLowerInvariant();
-            if (!SupportedExtensions.ContainsKey(extension))
-                continue;
+        var configFilesLock = new object();
 
-            try
+        try
+        {
+            await Parallel.ForEachAsync(supportedFiles, options, async (file, ct) =>
             {
-                var fileInfo = new FileInfo(file);
-                var preview = await GetFilePreviewAsync(file, 10);
-
-                var configFile = new ConfigFile
+                try
                 {
-                    Name = Path.GetFileName(file),
-                    FilePath = Path.GetRelativePath(basePath, file),
-                    FileType = extension,
-                    Language = SupportedExtensions[extension],
-                    FileSize = fileInfo.Length,
-                    LastModified = fileInfo.LastWriteTime,
-                    Preview = preview
-                };
+                    var extension = Path.GetExtension(file).ToLowerInvariant();
+                    var fileInfo = new FileInfo(file);
+                    var preview = await GetFilePreviewAsync(file, 10);
 
-                result.ConfigFiles.Add(configFile);
-                result.TotalFiles++;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Error processing config file: {File}", file);
-                result.Warnings.Add($"Could not process config file: {Path.GetFileName(file)}");
-            }
+                    var configFile = new ConfigFile
+                    {
+                        Name = Path.GetFileName(file),
+                        FilePath = Path.GetRelativePath(basePath, file),
+                        FileType = extension,
+                        Language = SupportedExtensions[extension],
+                        FileSize = fileInfo.Length,
+                        LastModified = fileInfo.LastWriteTime,
+                        Preview = preview
+                    };
+
+                    lock (configFilesLock)
+                    {
+                        result.ConfigFiles.Add(configFile);
+                        result.TotalFiles++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Error processing config file: {File}", file);
+                    lock (configFilesLock)
+                    {
+                        result.Warnings.Add($"Could not process config file: {Path.GetFileName(file)}");
+                    }
+                }
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogDebug("Config directory scan was cancelled");
         }
     }
 
@@ -385,3 +406,4 @@ public class ModpackScanner : IModpackScanner
         return $"{len:0.##} {sizes[order]}";
     }
 }
+

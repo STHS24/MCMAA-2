@@ -208,7 +208,7 @@ class Program
 
             Console.WriteLine($"🚀 Starting modpack analysis...");
             Console.WriteLine($"   Path: {path}");
-            Console.WriteLine($"   Task: {task}");
+            Console.WriteLine($"   Task: {analysisTask.Name}");
             Console.WriteLine($"   Model: {model ?? aiAssistant.GetRecommendedModel(taskType)}");
             Console.WriteLine();
 
@@ -240,7 +240,7 @@ class Program
 
             if (noStreaming)
             {
-                analysisResult = await aiAssistant.AnalyzeAsync(scanResult, analysisTask, model);
+                analysisResult = await aiAssistant.AnalyzeAsync(scanResult, analysisTask, model, noCache);
             }
             else
             {
@@ -248,7 +248,8 @@ class Program
                     scanResult,
                     analysisTask,
                     chunk => Console.Write(chunk),
-                    model);
+                    model,
+                    noCache);
                 Console.WriteLine(); // New line after streaming
             }
 

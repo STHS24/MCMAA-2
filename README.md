@@ -92,8 +92,8 @@ dotnet run --project src/MCMAA.CLI -- /path/to/modpack --task performance --metr
 ### Advanced Usage
 
 ```bash
-# Export analysis results
-dotnet run --project src/MCMAA.CLI -- /path/to/modpack --output analysis.json
+# Export analysis results (saved as Markdown)
+dotnet run --project src/MCMAA.CLI -- /path/to/modpack --output analysis.md
 
 # Clear cache and force fresh analysis
 dotnet run --project src/MCMAA.CLI -- /path/to/modpack --clear-cache --no-cache
@@ -108,7 +108,7 @@ dotnet run --project src/MCMAA.CLI -- /path/to/modpack --export-metrics metrics.
 - `<path>` - Path to modpack directory or configuration file
 
 ### Options
-- `--task <type>` - Analysis task type: `quick`, `full`, `conflicts`, `performance`, `summary` (default: `quick`)
+- `--task <type>` - Analysis task type: `quick`, `full`, `conflicts`, `performance`, `summary` (default: `full`)
 - `--model <name>` - Ollama model to use (default: auto-detect best available)
 - `--no-cache` - Disable response caching for this run
 - `--clear-cache` - Clear all cached responses before analysis
@@ -126,7 +126,8 @@ dotnet run --project src/MCMAA.CLI -- ./my-modpack \
   --model llama2:7b \
   --metrics \
   --stats \
-  --export-metrics metrics.json
+  --export-metrics metrics.json \
+  --output analysis.md
 
 # Quick conflict check without caching
 dotnet run --project src/MCMAA.CLI -- ./my-modpack \
