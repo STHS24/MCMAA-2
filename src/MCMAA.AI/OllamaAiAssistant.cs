@@ -85,6 +85,8 @@ public class OllamaAiAssistant : IAiAssistant
     private readonly ISessionManager _sessionManager;
     private readonly IContentPreprocessor _contentPreprocessor;
     private readonly IStreamingHandler _streamingHandler;
+    private readonly IMetricsCollector _metricsCollector;
+    private readonly IPerformanceTracker _performanceTracker;
 
     // Cache for available models to avoid repeated API calls
     private Dictionary<string, string>? _cachedModels;
@@ -97,7 +99,9 @@ public class OllamaAiAssistant : IAiAssistant
         ICacheService cacheService,
         ISessionManager sessionManager,
         IContentPreprocessor contentPreprocessor,
-        IStreamingHandler streamingHandler)
+        IStreamingHandler streamingHandler,
+        IMetricsCollector metricsCollector,
+        IPerformanceTracker performanceTracker)
     {
         _logger = logger;
         _aiConfig = aiConfig.Value;
@@ -106,6 +110,8 @@ public class OllamaAiAssistant : IAiAssistant
         _sessionManager = sessionManager;
         _contentPreprocessor = contentPreprocessor;
         _streamingHandler = streamingHandler;
+        _metricsCollector = metricsCollector;
+        _performanceTracker = performanceTracker;
     }
 
     public string GetRecommendedModel(AnalysisTaskType taskType)
@@ -118,7 +124,7 @@ public class OllamaAiAssistant : IAiAssistant
         }
 
         // Fallback to standard model
-        return _aiConfig.Models.GetValueOrDefault("standard", "qwen2.5-coder");
+        return _aiConfig.Models.GetValueOrDefault("standard", "phi3:mini");
     }
 
     public async Task<bool> IsAvailableAsync(CancellationToken cancellationToken = default)
@@ -373,6 +379,11 @@ public class OllamaAiAssistant : IAiAssistant
         CancellationToken cancellationToken = default)
     {
         var startTime = DateTime.UtcNow;
+        using var performanceContext = _performanceTracker.StartTracking("AiAnalysis", new Dictionary<string, object>
+        {
+            ["task_type"] = task.Type.ToString(),
+            ["streaming"] = false
+        });
 
         // Determine and validate model to use
         var requestedModel = modelOverride ?? GetRecommendedModel(task.Type);
@@ -388,10 +399,12 @@ public class OllamaAiAssistant : IAiAssistant
             Temperature = _aiConfig.DefaultTemperature
         };
 
+        PreprocessedContent? preprocessedContent = null;
+
         try
         {
             // Preprocess content for optimal AI input
-            var preprocessedContent = await _contentPreprocessor.PreprocessAsync(scanResult, task, cancellationToken);
+            preprocessedContent = await _contentPreprocessor.PreprocessAsync(scanResult, task, cancellationToken);
             _logger.LogDebug("Content preprocessed: {OriginalTokens} -> {FinalTokens} tokens ({CompressionRatio:P1})",
                 preprocessedContent.OriginalTokens, preprocessedContent.EstimatedTokens, preprocessedContent.CompressionRatio);
 
@@ -523,6 +536,31 @@ public class OllamaAiAssistant : IAiAssistant
         }
 
         result.Duration = DateTime.UtcNow - startTime;
+
+        // Record analysis metrics
+        try
+        {
+            var metric = new AnalysisMetric
+            {
+                Model = model,
+                TaskType = task.Type,
+                Duration = result.Duration,
+                TokensUsed = result.TokensUsed,
+                InputTokens = preprocessedContent?.EstimatedTokens ?? 0,
+                OutputTokens = result.TokensUsed,
+                FromCache = result.FromCache,
+                StreamingUsed = false,
+                Success = result.Success,
+                ErrorMessage = result.Errors.FirstOrDefault(),
+                Temperature = _aiConfig.DefaultTemperature
+            };
+            await _metricsCollector.RecordAnalysisMetricAsync(metric, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to record analysis metrics");
+        }
+
         return result;
     }
 
@@ -535,6 +573,11 @@ public class OllamaAiAssistant : IAiAssistant
         CancellationToken cancellationToken = default)
     {
         var startTime = DateTime.UtcNow;
+        using var performanceContext = _performanceTracker.StartTracking("AiAnalysisStreaming", new Dictionary<string, object>
+        {
+            ["task_type"] = task.Type.ToString(),
+            ["streaming"] = true
+        });
 
         // Determine and validate model to use
         var requestedModel = modelOverride ?? GetRecommendedModel(task.Type);
@@ -551,15 +594,17 @@ public class OllamaAiAssistant : IAiAssistant
             StreamingUsed = true
         };
 
+        PreprocessedContent? preprocessedContentStreaming = null;
+
         try
         {
             // Preprocess content for optimal AI input
-            var preprocessedContent = await _contentPreprocessor.PreprocessAsync(scanResult, task, cancellationToken);
+            preprocessedContentStreaming = await _contentPreprocessor.PreprocessAsync(scanResult, task, cancellationToken);
             _logger.LogDebug("Content preprocessed for streaming: {OriginalTokens} -> {FinalTokens} tokens ({CompressionRatio:P1})",
-                preprocessedContent.OriginalTokens, preprocessedContent.EstimatedTokens, preprocessedContent.CompressionRatio);
+                preprocessedContentStreaming.OriginalTokens, preprocessedContentStreaming.EstimatedTokens, preprocessedContentStreaming.CompressionRatio);
 
             // Generate prompt with preprocessed content
-            var prompt = GeneratePromptWithPreprocessedContent(preprocessedContent, task);
+            var prompt = GeneratePromptWithPreprocessedContent(preprocessedContentStreaming, task);
 
             // Check cache first (unless skipped)
             var cacheKey = _cacheService.GenerateKey(prompt, model, _aiConfig.DefaultTemperature, task.Type.ToString());
@@ -722,6 +767,31 @@ public class OllamaAiAssistant : IAiAssistant
         }
 
         result.Duration = DateTime.UtcNow - startTime;
+
+        // Record streaming analysis metrics
+        try
+        {
+            var metric = new AnalysisMetric
+            {
+                Model = model,
+                TaskType = task.Type,
+                Duration = result.Duration,
+                TokensUsed = result.TokensUsed,
+                InputTokens = preprocessedContentStreaming?.EstimatedTokens ?? 0,
+                OutputTokens = result.TokensUsed,
+                FromCache = result.FromCache,
+                StreamingUsed = true,
+                Success = result.Success,
+                ErrorMessage = result.Errors.FirstOrDefault(),
+                Temperature = _aiConfig.DefaultTemperature
+            };
+            await _metricsCollector.RecordAnalysisMetricAsync(metric, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to record streaming analysis metrics");
+        }
+
         return result;
     }
 

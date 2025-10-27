@@ -161,4 +161,170 @@ public class CoreFunctionalityTests
         // Assert
         Assert.False(isValid);
     }
+
+    [Fact]
+    public async Task MetricsCollector_CanRecordScanMetric()
+    {
+        // Arrange
+        var serviceProvider = CreateServiceProvider();
+        var metricsCollector = serviceProvider.GetRequiredService<IMetricsCollector>();
+        var scanMetric = new ScanMetric
+        {
+            ScanPath = "/test/path",
+            Duration = TimeSpan.FromMilliseconds(100),
+            FilesScanned = 50,
+            DirectoriesScanned = 5,
+            ModsFound = 10,
+            ConfigFilesFound = 20,
+            ResourcePacksFound = 2,
+            ErrorCount = 0,
+            WarningCount = 1
+        };
+
+        // Act
+        await metricsCollector.RecordScanMetricAsync(scanMetric);
+        var report = await metricsCollector.GetMetricsReportAsync();
+
+        // Assert
+        Assert.NotNull(report);
+        Assert.Equal(1, report.TotalScans);
+        Assert.Equal(50, report.TotalFilesScanned);
+    }
+
+    [Fact]
+    public async Task MetricsCollector_CanRecordAnalysisMetric()
+    {
+        // Arrange
+        var serviceProvider = CreateServiceProvider();
+        var metricsCollector = serviceProvider.GetRequiredService<IMetricsCollector>();
+        var analysisMetric = new AnalysisMetric
+        {
+            Model = "phi3:mini",
+            TaskType = AnalysisTaskType.Quick,
+            Duration = TimeSpan.FromMilliseconds(500),
+            TokensUsed = 1000,
+            InputTokens = 500,
+            OutputTokens = 500,
+            FromCache = false,
+            StreamingUsed = false,
+            Success = true,
+            Temperature = 0.7
+        };
+
+        // Act
+        await metricsCollector.RecordAnalysisMetricAsync(analysisMetric);
+        var report = await metricsCollector.GetMetricsReportAsync();
+
+        // Assert
+        Assert.NotNull(report);
+        Assert.Equal(1, report.TotalAnalyses);
+        Assert.Equal(1000, report.TotalTokensUsed);
+    }
+
+    [Fact]
+    public async Task MetricsCollector_CanRecordPreprocessingMetric()
+    {
+        // Arrange
+        var serviceProvider = CreateServiceProvider();
+        var metricsCollector = serviceProvider.GetRequiredService<IMetricsCollector>();
+        var preprocessingMetric = new PreprocessingMetric
+        {
+            TaskType = AnalysisTaskType.Full,
+            Duration = TimeSpan.FromMilliseconds(200),
+            OriginalTokens = 2000,
+            OptimizedTokens = 1400,
+            CompressionRatio = 0.7,
+            HighPrioritySections = 3,
+            MediumPrioritySections = 2,
+            LowPrioritySections = 1,
+            OptimizationSteps = new List<string> { "Prioritized", "Filtered", "Optimized" }
+        };
+
+        // Act
+        await metricsCollector.RecordPreprocessingMetricAsync(preprocessingMetric);
+        var report = await metricsCollector.GetMetricsReportAsync();
+
+        // Assert
+        Assert.NotNull(report);
+        Assert.Equal(1, report.TotalPreprocessingOperations);
+        Assert.Equal(0.7, report.AverageCompressionRatio);
+    }
+
+    [Fact]
+    public async Task MetricsCollector_CanExportMetricsAsJson()
+    {
+        // Arrange
+        var serviceProvider = CreateServiceProvider();
+        var metricsCollector = serviceProvider.GetRequiredService<IMetricsCollector>();
+        var scanMetric = new ScanMetric
+        {
+            ScanPath = "/test/path",
+            Duration = TimeSpan.FromMilliseconds(100),
+            FilesScanned = 50,
+            DirectoriesScanned = 5,
+            ModsFound = 10,
+            ConfigFilesFound = 20,
+            ResourcePacksFound = 2,
+            ErrorCount = 0,
+            WarningCount = 1
+        };
+        await metricsCollector.RecordScanMetricAsync(scanMetric);
+
+        // Act
+        var jsonExport = await metricsCollector.ExportMetricsAsync(MetricsExportFormat.Json);
+
+        // Assert
+        Assert.NotNull(jsonExport);
+        Assert.NotEmpty(jsonExport);
+        Assert.Contains("totalScans", jsonExport);
+        Assert.Contains("totalFilesScanned", jsonExport);
+    }
+
+    [Fact]
+    public async Task MetricsCollector_CanExportMetricsAsCsv()
+    {
+        // Arrange
+        var serviceProvider = CreateServiceProvider();
+        var metricsCollector = serviceProvider.GetRequiredService<IMetricsCollector>();
+        var scanMetric = new ScanMetric
+        {
+            ScanPath = "/test/path",
+            Duration = TimeSpan.FromMilliseconds(100),
+            FilesScanned = 50,
+            DirectoriesScanned = 5,
+            ModsFound = 10,
+            ConfigFilesFound = 20,
+            ResourcePacksFound = 2,
+            ErrorCount = 0,
+            WarningCount = 1
+        };
+        await metricsCollector.RecordScanMetricAsync(scanMetric);
+
+        // Act
+        var csvExport = await metricsCollector.ExportMetricsAsync(MetricsExportFormat.Csv);
+
+        // Assert
+        Assert.NotNull(csvExport);
+        Assert.NotEmpty(csvExport);
+    }
+
+    [Fact]
+    public async Task PerformanceTracker_CanTrackOperation()
+    {
+        // Arrange
+        var serviceProvider = CreateServiceProvider();
+        var performanceTracker = serviceProvider.GetRequiredService<IPerformanceTracker>();
+
+        // Act
+        using (var context = performanceTracker.StartTracking("TestOperation", new Dictionary<string, object> { ["test"] = "value" }))
+        {
+            await Task.Delay(10);
+            context.AddCheckpoint("Checkpoint1");
+        }
+        var stats = await performanceTracker.GetStatisticsAsync();
+
+        // Assert
+        Assert.NotNull(stats);
+        Assert.True(stats.TotalOperations > 0);
+    }
 }

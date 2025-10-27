@@ -17,6 +17,7 @@ namespace MCMAA.Scanner;
 public class ModpackScanner : IModpackScanner
 {
     private readonly ILogger<ModpackScanner> _logger;
+    private readonly IMetricsCollector _metricsCollector;
 
     /// <summary>
     /// Supported file extensions and their language mappings
@@ -37,9 +38,10 @@ public class ModpackScanner : IModpackScanner
         [".properties"] = "ini"
     };
 
-    public ModpackScanner(ILogger<ModpackScanner> logger)
+    public ModpackScanner(ILogger<ModpackScanner> logger, IMetricsCollector metricsCollector)
     {
         _logger = logger;
+        _metricsCollector = metricsCollector;
     }
 
     public Dictionary<string, string> GetSupportedExtensions() => SupportedExtensions;
@@ -94,6 +96,28 @@ public class ModpackScanner : IModpackScanner
 
             result.ScanDuration = DateTime.UtcNow - startTime;
             _logger.LogInformation("Scan completed in {Duration}ms", result.ScanDuration.TotalMilliseconds);
+
+            // Record scan metrics
+            try
+            {
+                var scanMetric = new ScanMetric
+                {
+                    ScanPath = path,
+                    Duration = result.ScanDuration,
+                    FilesScanned = result.TotalFiles,
+                    DirectoriesScanned = result.TotalDirectories,
+                    ModsFound = result.Mods.Count,
+                    ConfigFilesFound = result.ConfigFiles.Count,
+                    ResourcePacksFound = result.ResourcePacks.Count,
+                    ErrorCount = result.Errors.Count,
+                    WarningCount = result.Warnings.Count
+                };
+                await _metricsCollector.RecordScanMetricAsync(scanMetric, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to record scan metrics");
+            }
         }
         catch (Exception ex)
         {
