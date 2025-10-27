@@ -5,8 +5,10 @@
 # .NET Build Output
 ###################
 
-# Developer Helpers
+# Non-relevant .md files
 DEVELOPER_GUIDE.md
+PROJECT_BLUEPRINT.md
+IMPLEMENTATION_SUMMARY.md
  
 # Build results
 [Dd]ebug/
